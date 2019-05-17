@@ -2,10 +2,13 @@ package forkexec
 
 import (
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"syscall"
 	"unsafe"
+
+	"github.com/xdu-icpc/seccomp"
 )
 
 type childState int
@@ -108,6 +111,11 @@ func forkExec(argv0 string, argv []string, attr *Attr) (pid int, err error) {
 		}
 	}
 
+	fprog, err := seccomp.NewSockFprog(attr.Seccomp)
+	if err != nil {
+		return 0, err
+	}
+
 	syscall.ForkLock.Lock()
 	err = syscall.Pipe2(p[:], syscall.O_CLOEXEC)
 	if err != nil {
@@ -115,7 +123,7 @@ func forkExec(argv0 string, argv []string, attr *Attr) (pid int, err error) {
 		return 0, err
 	}
 
-	pid, err1 = doForkExec(argv0p, argvp, envvp, chroot, dir, attr, p[1])
+	pid, err1 = doForkExec(argv0p, argvp, envvp, chroot, dir, attr, p[1], fprog)
 	syscall.ForkLock.Unlock()
 
 	syscall.Close(p[1])
@@ -152,8 +160,8 @@ func forkExec(argv0 string, argv []string, attr *Attr) (pid int, err error) {
 }
 
 //go:norace
-func doForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr, pipe int) (pid int, err syscall.Errno) {
-	r1, err1, _, locked := doForkExec1(argv0, argv, envv, chroot, dir, attr, pipe)
+func doForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr, pipe int, fprog *seccomp.SockFprog) (pid int, err syscall.Errno) {
+	r1, err1, _, locked := doForkExec1(argv0, argv, envv, chroot, dir, attr, pipe, fprog)
 	if locked {
 		runtime_AfterFork()
 	}
@@ -167,7 +175,7 @@ func doForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr, 
 
 //go:noinline
 //go:norace
-func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr, pipe int) (r1 uintptr, err1 syscall.Errno, p [2]int, locked bool) {
+func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr, pipe int, fprog *seccomp.SockFprog) (r1 uintptr, err1 syscall.Errno, p [2]int, locked bool) {
 	var (
 		state   childState
 		nextfd  int
@@ -240,7 +248,7 @@ func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr,
 	}
 
 	if attr.SetNoNewPrivs {
-		err1 = asm_prctl_set_no_new_privs()
+		_, _, err1 = syscall.RawSyscall(syscall.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0)
 		if err1 != 0 {
 			state = childStateNoNewPrivs
 			goto childerror
@@ -299,8 +307,8 @@ func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr,
 		syscall.RawSyscall(syscall.SYS_CLOSE, uintptr(i), 0, 0)
 	}
 
-	if attr.Seccomp != nil {
-		err1 = asm_seccomp(attr.SeccompFlags, attr.buf[:], attr.Seccomp)
+	if fprog != nil {
+		_, _, err1 = syscall.RawSyscall(unix.SYS_SECCOMP, 1, attr.SeccompFlags, uintptr(unsafe.Pointer(fprog)))
 		if err1 != 0 {
 			state = childStateSeccomp
 			goto childerror
