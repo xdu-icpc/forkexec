@@ -17,5 +17,4 @@ type Attr struct {
 	Seccomp       []bpf.RawInstruction // The BPF seccomp syscall filter.  Requires the no_new_privs attribute.
 	SeccompFlags  uintptr              // Flags for seccomp calls.
 	SetNoNewPrivs bool                 // Set the process' no_new_privs attribute.
-	buf           [16]byte
 }
