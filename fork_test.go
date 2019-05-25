@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"golang.org/x/net/bpf"
 	"golang.org/x/sys/unix"
+	"log"
 	"os"
 	"syscall"
 	"testing"
@@ -31,6 +32,25 @@ func TestHelperProcess(t *testing.T) {
 		fmt.Println(err)
 		if err != syscall.ENOSYS {
 			os.Exit(1)
+		}
+	case "file":
+		for i := 0; i < 10; i++ {
+			func() {
+				r := os.NewFile(uintptr(i)+3, fmt.Sprintf("|%d", i))
+				defer r.Close()
+				w := os.NewFile(uintptr(i)+13, fmt.Sprintf("%d|", i))
+				defer w.Close()
+
+				_, err := fmt.Fprintf(w, "%d\n", i)
+				if err != nil {
+					log.Fatal(err)
+				}
+				x := 0
+				_, err = fmt.Fscanf(r, "%d", &x)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}()
 		}
 	}
 }
@@ -61,6 +81,33 @@ func TestForkExec(t *testing.T) {
 	secAttr := basicAttr
 	secAttr.Seccomp, err = bpf.Assemble(rule)
 
+	fileAttr := basicAttr
+	r := make([]*os.File, 0, 10)
+	w := make([]*os.File, 0, 10)
+	for i := 0; i < 10; i++ {
+		rd, wd, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r = append(r, rd)
+		w = append(w, wd)
+	}
+	defer func() {
+		for _, f := range r {
+			f.Close()
+		}
+		for _, f := range w {
+			f.Close()
+		}
+	}()
+
+	for _, f := range r {
+		fileAttr.Files = append(fileAttr.Files, f.Fd())
+	}
+	for _, f := range w {
+		fileAttr.Files = append(fileAttr.Files, f.Fd())
+	}
+
 	tests := []struct {
 		name string
 		argv []string
@@ -80,6 +127,11 @@ func TestForkExec(t *testing.T) {
 			name: "TestSeccomp2",
 			argv: []string{exe, "getcpu"},
 			attr: &secAttr,
+		},
+		{
+			name: "TestFile",
+			argv: []string{exe, "file"},
+			attr: &fileAttr,
 		},
 	}
 
