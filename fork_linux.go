@@ -256,7 +256,7 @@ func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr,
 	}
 
 	if pipe < nextfd {
-		_, _, err1 = syscall.RawSyscall(syscall.SYS_DUP, uintptr(pipe), uintptr(nextfd), 0)
+		_, _, err1 = syscall.RawSyscall(_SYS_dup, uintptr(pipe), uintptr(nextfd), 0)
 		if err1 != 0 {
 			state = childStateDup
 			goto childerror
@@ -271,7 +271,7 @@ func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr,
 			if nextfd == pipe {
 				nextfd++
 			}
-			_, _, err1 = syscall.RawSyscall(syscall.SYS_DUP, uintptr(fd[i]), uintptr(nextfd), 0)
+			_, _, err1 = syscall.RawSyscall(_SYS_dup, uintptr(fd[i]), uintptr(nextfd), 0)
 			if err1 != 0 {
 				state = childStateDup
 				goto childerror
@@ -296,7 +296,7 @@ func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr,
 			continue
 		}
 
-		_, _, err1 = syscall.RawSyscall(syscall.SYS_DUP, uintptr(fd[i]), uintptr(i), 0)
+		_, _, err1 = syscall.RawSyscall(_SYS_dup, uintptr(fd[i]), uintptr(i), 0)
 		if err1 != 0 {
 			state = childStateDup
 			goto childerror
