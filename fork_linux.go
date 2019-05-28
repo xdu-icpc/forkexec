@@ -24,6 +24,9 @@ const (
 	childStateClearCloexec
 	childStateSeccomp
 	childStateExec
+	childStateClosePipe
+	childStateReadPipeForIdMapping
+	childStateConfirmIdMapping
 )
 
 var stateStr = []string{
@@ -37,6 +40,9 @@ var stateStr = []string{
 	"can not clear FD_CLOEXEC: fcntl",
 	"seccomp",
 	"exec",
+	"can not close pipe",
+	"can not read pipe for ID mapping",
+	"fail to set ID mapping",
 }
 
 func (s childState) String() string {
@@ -161,7 +167,7 @@ func forkExec(argv0 string, argv []string, attr *Attr) (pid int, err error) {
 
 //go:norace
 func doForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr, pipe int, fprog *seccomp.SockFprog) (pid int, err syscall.Errno) {
-	r1, err1, _, locked := doForkExec1(argv0, argv, envv, chroot, dir, attr, pipe, fprog)
+	r1, err1, p, locked := doForkExec1(argv0, argv, envv, chroot, dir, attr, pipe, fprog)
 	if locked {
 		runtime_AfterFork()
 	}
@@ -170,6 +176,18 @@ func doForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr, 
 	}
 
 	pid = int(r1)
+
+	if attr.UidMappings != nil || attr.GidMappings != nil {
+		syscall.Close(p[0])
+		err := writeUidGidMappings(pid, attr)
+		var err2 syscall.Errno
+		if err != nil {
+			err2 = err.(syscall.Errno)
+		}
+		syscall.RawSyscall(syscall.SYS_WRITE, uintptr(p[1]), uintptr(unsafe.Pointer(&err2)), unsafe.Sizeof(err2))
+		syscall.Close(p[1])
+	}
+
 	return pid, 0
 }
 
@@ -180,6 +198,7 @@ func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr,
 		state   childState
 		nextfd  int
 		i       int
+		err2    syscall.Errno
 		cstatus childStatus
 	)
 
@@ -195,6 +214,13 @@ func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr,
 	}
 	nextfd++
 
+	if attr.UidMappings != nil || attr.GidMappings != nil {
+		if err2 := syscall.Pipe2(p[:], syscall.O_CLOEXEC); err2 != nil {
+			err1 = err2.(syscall.Errno)
+			return
+		}
+	}
+
 	runtime_BeforeFork()
 	locked = true
 	r1, _, err1 = syscall.RawSyscall6(syscall.SYS_CLONE, uintptr(syscall.SIGCHLD)|attr.Cloneflags, 0, 0, 0, 0, 0)
@@ -204,6 +230,29 @@ func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr,
 
 	// In Child
 	runtime_AfterForkInChild()
+
+	// Wait for UID/GID mappings to be written.
+	if attr.UidMappings != nil || attr.GidMappings != nil {
+		if _, _, err1 = syscall.RawSyscall(syscall.SYS_CLOSE, uintptr(p[1]), 0, 0); err1 != 0 {
+			state = childStateClosePipe
+			goto childerror
+		}
+		r1, _, err1 = syscall.RawSyscall(syscall.SYS_READ, uintptr(p[0]), uintptr(unsafe.Pointer(&err2)), unsafe.Sizeof(err2))
+		if err1 != 0 {
+			state = childStateReadPipeForIdMapping
+			goto childerror
+		}
+		if r1 != unsafe.Sizeof(err2) {
+			err1 = syscall.EINVAL
+			state = childStateReadPipeForIdMapping
+			goto childerror
+		}
+		if err2 != 0 {
+			err1 = err2
+			state = childStateConfirmIdMapping
+			goto childerror
+		}
+	}
 
 	if attr.Setpgid {
 		_, _, err1 = syscall.RawSyscall(syscall.SYS_SETPGID, 0, uintptr(attr.Pgid), 0)
@@ -329,4 +378,71 @@ childerror:
 	for {
 		syscall.RawSyscall(syscall.SYS_EXIT, 253, 0, 0)
 	}
+}
+
+func writeUidGidMappings(pid int, attr *Attr) error {
+	if attr.UidMappings != nil {
+		fn := fmt.Sprintf("/proc/%d/uid_map", pid)
+		if err := writeIDMappings(fn, attr.UidMappings); err != nil {
+			return err
+		}
+	}
+
+	if attr.GidMappings != nil {
+		if err := writeSetgroups(pid, attr.GidMappingsEnableSetgroups); err != nil && err != syscall.ENOENT {
+			return err
+		}
+		fn := fmt.Sprintf("/proc/%d/gid_map", pid)
+		if err := writeIDMappings(fn, attr.GidMappings); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeSetgroups(pid int, enable bool) error {
+	fn := fmt.Sprintf("/proc/%d/setgroups", pid)
+	fd, err := syscall.Open(fn, syscall.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+
+	var data []byte
+	if enable {
+		data = []byte("allow")
+	} else {
+		data = []byte("deny")
+	}
+
+	if _, err = syscall.Write(fd, data); err != nil {
+		syscall.Close(fd)
+		return err
+	}
+
+	return syscall.Close(fd)
+}
+
+func writeIDMappings(path string, idMap []syscall.SysProcIDMap) error {
+	fd, err := syscall.Open(path, syscall.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+
+	data := ""
+	for _, im := range idMap {
+		data = data + fmt.Sprintf("%d %d %d\n", im.ContainerID, im.HostID, im.Size)
+	}
+
+	bytes, err := syscall.ByteSliceFromString(data)
+	if err != nil {
+		syscall.Close(fd)
+		return err
+	}
+
+	if _, err := syscall.Write(fd, bytes); err != nil {
+		syscall.Close(fd)
+		return err
+	}
+
+	return syscall.Close(fd)
 }

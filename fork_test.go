@@ -52,6 +52,15 @@ func TestHelperProcess(t *testing.T) {
 				}
 			}()
 		}
+	case "ns":
+		if os.Getuid() != 0 {
+			log.Fatalf("uid = %d", os.Getuid())
+		}
+		if os.Getgid() != 0 {
+			log.Fatalf("gid = %d", os.Getgid())
+		}
+	default:
+		log.Fatal("what the fuck")
 	}
 }
 
@@ -108,6 +117,23 @@ func TestForkExec(t *testing.T) {
 		fileAttr.Files = append(fileAttr.Files, f.Fd())
 	}
 
+	rootUidMap := syscall.SysProcIDMap{
+		ContainerID: 0,
+		HostID:      os.Getuid(),
+		Size:        1,
+	}
+
+	rootGidMap := syscall.SysProcIDMap{
+		ContainerID: 0,
+		HostID:      os.Getgid(),
+		Size:        1,
+	}
+
+	nsAttr := basicAttr
+	nsAttr.Cloneflags = syscall.CLONE_NEWUSER
+	nsAttr.UidMappings = []syscall.SysProcIDMap{rootUidMap}
+	nsAttr.GidMappings = []syscall.SysProcIDMap{rootGidMap}
+
 	tests := []struct {
 		name string
 		argv []string
@@ -132,6 +158,11 @@ func TestForkExec(t *testing.T) {
 			name: "TestFile",
 			argv: []string{exe, "file"},
 			attr: &fileAttr,
+		},
+		{
+			name: "TestNamespace",
+			argv: []string{exe, "ns"},
+			attr: &nsAttr,
 		},
 	}
 

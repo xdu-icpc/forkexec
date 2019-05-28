@@ -2,3 +2,6 @@ language: go
 go:
     - "1.x"
     - "master"
+before_script:
+    - echo "Enable user namespace for unpriviledged users..."
+    - sudo sysctl kernel.unprivileged_userns_clone=1
