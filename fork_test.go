@@ -167,7 +167,7 @@ func TestForkExec(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		t.Run(test.name, func(*testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			pid, err := forkexec.ForkExec(test.argv[0], test.argv, test.attr)
 			if err != nil {
 				t.Fatal(err)
