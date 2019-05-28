@@ -143,6 +143,12 @@ func TestForkExec(t *testing.T) {
 			}
 			var wstat syscall.WaitStatus
 			_, err = syscall.Wait4(pid, &wstat, 0, nil)
+			if err != nil {
+				t.Fatalf("Wait4: %v", err)
+			}
+			if !wstat.Exited() || wstat.ExitStatus() != 0 {
+				t.Fatalf("child didn't finish successfully")
+			}
 			t.Logf("pid = %d, stat = %v", pid, wstat)
 		})
 	}
