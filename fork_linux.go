@@ -27,6 +27,7 @@ const (
 	childStateClosePipe
 	childStateReadPipeForIdMapping
 	childStateConfirmIdMapping
+	childStateSetsid
 )
 
 var stateStr = []string{
@@ -43,6 +44,7 @@ var stateStr = []string{
 	"can not close pipe",
 	"can not read pipe for ID mapping",
 	"fail to set ID mapping",
+	"setsid",
 }
 
 func (s childState) String() string {
@@ -250,6 +252,14 @@ func doForkExec1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *Attr,
 		if err2 != 0 {
 			err1 = err2
 			state = childStateConfirmIdMapping
+			goto childerror
+		}
+	}
+
+	if attr.Setsid {
+		_, _, err1 = syscall.RawSyscall(syscall.SYS_SETSID, 0, 0, 0)
+		if err1 != 0 {
+			state = childStateSetsid
 			goto childerror
 		}
 	}

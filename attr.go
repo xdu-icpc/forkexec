@@ -10,6 +10,7 @@ type Attr struct {
 	Env           []string               // Environment.
 	Files         []uintptr              // File descriptors.
 	Chroot        string                 // Chroot.
+	Setsid        bool                   // Create session.
 	Setpgid       bool                   // Set process group ID to Pgid, or new pid if Pgid == 0.
 	Pdeathsig     syscall.Signal         // Signal that the process will get when its parent dies.
 	Pgid          int                    // Child's process group ID if Setpgid.

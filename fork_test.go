@@ -59,6 +59,14 @@ func TestHelperProcess(t *testing.T) {
 		if os.Getgid() != 0 {
 			log.Fatalf("gid = %d", os.Getgid())
 		}
+	case "sid":
+		sid, _, errno := syscall.RawSyscall(syscall.SYS_GETSID, 0, 0, 0)
+		if errno != 0 {
+			log.Fatalf("getsid: %v", errno)
+		}
+		if int(sid) != os.Getpid() {
+			log.Fatalf("sid = %d, but pid = %d", sid, os.Getpid())
+		}
 	default:
 		log.Fatal("what the fuck")
 	}
@@ -134,6 +142,9 @@ func TestForkExec(t *testing.T) {
 	nsAttr.UidMappings = []syscall.SysProcIDMap{rootUidMap}
 	nsAttr.GidMappings = []syscall.SysProcIDMap{rootGidMap}
 
+	sidAttr := basicAttr
+	sidAttr.Setsid = true
+
 	tests := []struct {
 		name string
 		argv []string
@@ -163,6 +174,11 @@ func TestForkExec(t *testing.T) {
 			name: "TestNamespace",
 			argv: []string{exe, "ns"},
 			attr: &nsAttr,
+		},
+		{
+			name: "Testsid",
+			argv: []string{exe, "sid"},
+			attr: &sidAttr,
 		},
 	}
 
